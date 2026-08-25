@@ -28,28 +28,18 @@ Keeping one consistent graph snapshot in memory and answering queries straight f
 
 ## What it does
 
-```
-Obsidian vault                                          AI agents (Claude Code, etc.)
-      │                                                              │
-      │ file change                                                 │ MCP / Streamable HTTP
-      ▼                                                              ▼
-┌─────────────────┐   debounce    ┌───────────┐   publish   ┌──────────────────┐
-│  watchdog        │──────────────▶│  compile   │────────────▶│  snapshot (RAM)  │
-│  (per-file       │   batch       │  batch     │  (COW,      │  graph +         │
-│   events)        │               │            │   atomic)   │  trigram index + │
-└─────────────────┘                └─────┬──────┘             │  community map   │
-                                          │                    └────────┬─────────┘
-                                    slow cadence                        │
-                                 (60s idle OR 25                        │ read-only,
-                                  changes, whichever                    │ lock-free
-                                  first)                                ▼
-                                          │                    ┌──────────────────┐
-                                          ▼                    │  7 MCP tools     │
-                                ┌───────────────────┐          │  query_graph,    │
-                                │ Leiden clustering  │          │  get_node,       │
-                                │ (isolated          │          │  get_neighbors,  │
-                                │  subprocess)        │          │  ...             │
-                                └───────────────────┘          └──────────────────┘
+```mermaid
+flowchart TB
+    V(["Obsidian vault"])
+    AI(["AI agents (Claude Code, etc.)"])
+
+    V -->|"file change"| W["watchdog<br/>(per-file events)"]
+    W -->|"debounce / batch"| C["compile batch"]
+    C -->|"publish<br/>(COW, atomic)"| S["snapshot (RAM)<br/>graph + trigram index +<br/>community map"]
+    S -->|"read-only,<br/>lock-free"| M["7 MCP tools<br/>query_graph, get_node,<br/>get_neighbors, ..."]
+    AI -->|"MCP / Streamable HTTP"| M
+
+    C -->|"slow cadence<br/>(60s idle OR 25 changes,<br/>whichever first)"| L["Leiden clustering<br/>(isolated subprocess)"]
 ```
 
 The vault is the only system of record. Everything else — the in-RAM graph, the trigram index, `graph.json`, `KNOWLEDGE.md`, `vault_index.db` — is disposable in the sense that matters for recovery: all of it can be rebuilt from the vault on cold start, so nothing needs backing up. That's not the same as saying it's not confidential — derived artifacts still carry vault-derived names, relationships, and relative paths, so every file and directory this daemon writes (cache, index, graph JSON, knowledge Markdown, logs) is created owner-only (`0600`/`0700`) on POSIX, and neither the API key nor the vault's absolute path ever appears in a log line. There's no mutation API anywhere; agents can only read.
