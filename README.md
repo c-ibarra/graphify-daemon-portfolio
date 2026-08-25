@@ -10,7 +10,7 @@
 
 A local daemon that keeps a knowledge graph derived from an [Obsidian](https://obsidian.md/) vault resident in RAM and serves it to concurrent AI coding agents over [MCP](https://modelcontextprotocol.io/), so an agent can ask "what connects to X" and get an answer in milliseconds instead of re-reading and re-inferring the same context from raw files every session.
 
-**Highlights:** Python · MCP protocol (Streamable HTTP) · concurrency & subprocess isolation · 249 tests, CI-gated (`ruff` + `mypy --strict`) · documented design decisions (ADRs) · 5 real production bugs found & fixed with documented root cause
+**Highlights:** Python · MCP protocol (Streamable HTTP) · concurrency & subprocess isolation · 249 tests, CI-gated (`ruff` + `mypy --strict`) · documented design decisions (ADRs) · [6 real production bugs found & fixed](#production-bugs-found--fixed), each with documented root cause
 
 ## The problem
 
@@ -65,6 +65,17 @@ The vault is the only system of record. Everything else — the in-RAM graph, th
 **A rename is compiled as delete-then-create, not a dedicated fast path.** The previous path's cache and index state is removed first, then the destination is extracted exactly once through the same code as a normal create — reusing two already-correct paths instead of building and maintaining a third just to skip one extraction call. See [`docs/adr/0005-rename-as-delete-then-create.md`](docs/adr/0005-rename-as-delete-then-create.md).
 
 **MCP tool errors return a fixed generic message, never the real exception text.** An unexpected failure is logged in full for operators, but the client only ever sees a constant, tool-named message — an allowlist by construction, not a blocklist that has to catch everything that could leak (a file path, node content, an internal function name). See [`docs/adr/0006-mcp-errors-fixed-generic-message.md`](docs/adr/0006-mcp-errors-fixed-generic-message.md).
+
+## Production bugs found & fixed
+
+Six real bugs, each with a documented root cause — the number the Highlights line above counts, not a rounder marketing figure:
+
+1. **Clustering subprocess deadlock.** `run_clustering_subprocess` called `process.join()` before draining `result_queue`; a community-map result past ~8,000 nodes exceeded the OS pipe buffer (~64KB), leaving the child blocked writing while the parent blocked reading nothing. Found building `benchmarks/` — every one of 5 runs hit the timeout, with `process.is_alive()` still `True` at the 60s mark while the queue already held a valid result. Fixed by draining the queue before joining. See [ADR 0003](docs/adr/0003-drain-clustering-queue-before-join.md).
+2. **Unbounded graceful-shutdown hang.** The MCP subscriptions/listen stream this daemon deliberately keeps open never closes on its own, so `uvicorn`'s default (`timeout_graceful_shutdown=None`) waited for it forever. Found live: `SIGTERM` against the running production daemon left it refusing connections for 35+ seconds, and derived-artifact mtimes proved `persist_on_shutdown()` never ran. Fixed with a bounded 5s graceful-shutdown timeout.
+3. **Cross-thread SQLite connection.** The vault index's `sqlite3` connection was created on the daemon's init thread but used from the debounce timer's own thread on every flush — `sqlite3.ProgrammingError` on every real batch since startup, silently stalling the graph at cold-start state. All 147 relevant unit tests missed it because they call `sync_batch` synchronously, in-thread. Found reading live `launchd` logs while debugging an unrelated client-connection failure; fixed with `check_same_thread=False` (safe, since the single-writer batch consumer already serializes access) plus a regression test reproducing the real cross-thread shape.
+4. **Stateful MCP sessions broke a real client.** `StreamableHTTPSessionManager` defaulted to stateful sessions; a client that doesn't echo `Mcp-Session-Id` back after `initialize` got a 404 on every follow-up request, which it misread as an auth failure. Verified via `curl` (404 before the fix, 200 after) and fixed with `stateless=True`, matching `graphify.serve`'s own `--stateless` option.
+5. **Misleading truncation reporting.** `_cut_lines_to_budget` reported "0 more lines cut" whenever a single line alone exceeded the token budget, even though real content was truncated — a line-count delta doesn't reflect a mid-line cut. Fixed to detect and report that case explicitly, with regression tests added for the empty-graph, cache, and off-loop edge cases swept at the same time.
+6. **Vault path leak through extractor errors.** Raw extractor error text could surface the vault's absolute path to an MCP client — a real confidentiality leak, not just a theoretical one. Fixed by returning a fixed, tool-named generic message for any unexpected tool failure, with the real exception still logged in full for operators. See [ADR 0006](docs/adr/0006-mcp-errors-fixed-generic-message.md).
 
 ## MCP tools
 
