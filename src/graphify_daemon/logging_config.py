@@ -1,7 +1,8 @@
 """Configurable logging for the daemon: log level and log-file rotation.
 
-Env vars are read in `main()` and resolved here as pure functions, per the
-"env var reading deferred to main()" pattern used throughout this codebase.
+Env vars are read
+in `main()` and resolved here as pure functions, per the "env var reading
+deferred to main()" pattern used throughout this codebase.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import logging
 import logging.handlers
 from pathlib import Path
 
+from graphify_daemon.artifact_lifecycle.security import restrict_to_owner
 from graphify_daemon.errors import ConfigurationError
 
 DEFAULT_LOG_LEVEL = "INFO"
@@ -46,8 +48,10 @@ def configure_logging(log_file: Path, level: int, max_bytes: int, backup_count: 
     both propagate into one rotated file.
     """
     log_file.parent.mkdir(parents=True, exist_ok=True)
+    restrict_to_owner(log_file.parent)
     handler = logging.handlers.RotatingFileHandler(str(log_file), maxBytes=max_bytes, backupCount=backup_count)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    restrict_to_owner(log_file)
 
     root = logging.getLogger()
     root.setLevel(level)

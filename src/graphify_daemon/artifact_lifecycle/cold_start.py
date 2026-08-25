@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from graphify_daemon.vault_compiler.exclusions import OBSERVED_SUFFIXES, is_excluded
+from graphify_daemon.vault_compiler.exclusions import OBSERVED_SUFFIXES, is_excluded, resolve_within_vault
 from graphify_daemon.vault_compiler.extraction import (
     ExtractionCache,
     extract_file_with_failure_isolation,
@@ -39,6 +39,17 @@ def cold_start(
     `cache`. Pre-warms the trigram index via `holder.publish`, per
     "declaring itself ready" in the spec.
 
+    Every candidate path is validated with `resolve_within_vault` before
+    extraction — a symlink (or a path reached through a symlinked
+    ancestor directory) resolving outside `vault_root` is rejected and
+    logged with its vault-relative path only. `Path.rglob` itself already
+    does not descend into a symlinked directory on this project's Python
+    version (verified directly, not assumed), so this check's practical
+    effect today is limited to file symlinks — but it's the same
+    reusable confinement function the watcher uses, so both paths enforce
+    one rule. See specs/vault-compiler/spec.md "Vault confinement for
+    every processed path".
+
     A file whose extraction fails (raises, or returns an `"error"` key —
     same two failure modes `extract_batch` isolates) is logged and skipped,
     same as a steady-state batch failure, rather than silently dropped.
@@ -50,6 +61,9 @@ def cold_start(
         if is_excluded(path, vault_root, nested_repo_names=nested_repo_names):
             continue
         relative = path.relative_to(vault_root)
+        if resolve_within_vault(path, vault_root) is None:
+            logger.warning("Rejected %s: resolves outside the vault", relative)
+            continue
         observed.add(relative)
         current_mtime = path.stat().st_mtime
         if cache.mtime(relative) == current_mtime:

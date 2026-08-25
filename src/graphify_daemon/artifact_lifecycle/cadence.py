@@ -17,8 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from graphify_daemon.artifact_lifecycle.graph_artifacts import (
-    generate_knowledge_md,
     write_graph_json,
+    write_knowledge_md,
 )
 from graphify_daemon.artifact_lifecycle.metrics import Metrics
 from graphify_daemon.vault_compiler.clustering import (
@@ -58,7 +58,7 @@ def run_slow_cadence_cycle(
     current = holder.current()
     if current is not None:
         write_graph_json(current, graph_json_path)
-        knowledge_md_path.write_text(generate_knowledge_md(current))
+        write_knowledge_md(current, knowledge_md_path)
     cache.save(graph_cache_path)
 
     tracker.reset()

@@ -18,6 +18,7 @@ from pathlib import Path
 from graphify.analyze import god_nodes as _god_nodes
 from graphify.export import to_json
 
+from graphify_daemon.artifact_lifecycle.security import restrict_to_owner
 from graphify_daemon.vault_compiler.snapshot import GraphSnapshot
 
 
@@ -36,6 +37,16 @@ def write_graph_json(snapshot: GraphSnapshot, path: Path) -> None:
         graph = graph.copy()
         del graph.graph["_trigram_index"]
     to_json(graph, snapshot.community_map, str(path), force=True)
+    restrict_to_owner(path)
+
+
+def write_knowledge_md(snapshot: GraphSnapshot, path: Path) -> None:
+    """Render and write `generate_knowledge_md(snapshot)` to `path`,
+    owner-only on POSIX. The single write site for `KNOWLEDGE.md`, used
+    by both the routine slow-cadence cycle and the final shutdown flush.
+    """
+    path.write_text(generate_knowledge_md(snapshot))
+    restrict_to_owner(path)
 
 
 def generate_knowledge_md(snapshot: GraphSnapshot) -> str:

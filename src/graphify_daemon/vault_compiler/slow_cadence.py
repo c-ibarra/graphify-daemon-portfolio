@@ -24,6 +24,10 @@ class SlowCadenceTracker:
         self._accumulated_changes = 0
         self._last_batch_at = time.monotonic()
 
+    @property
+    def quiet_seconds(self) -> float:
+        return self._quiet_seconds
+
     def record_batch(self, change_count: int) -> None:
         self._accumulated_changes += change_count
         self._last_batch_at = time.monotonic()

@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING, Any, cast
 from graphify.extract import extract_python
 from graphify.extractors.markdown import extract_markdown
 
-from graphify_daemon.vault_compiler.batching import Batch
+from graphify_daemon.artifact_lifecycle.security import restrict_to_owner
+from graphify_daemon.vault_compiler.batching import Batch, ChangeKind
+from graphify_daemon.vault_compiler.exclusions import is_excluded, sanitize_log_text
 
 if TYPE_CHECKING:
     # Deferred to avoid a runtime cycle: artifact_lifecycle.metrics imports
@@ -66,16 +68,23 @@ def extract_file_with_failure_isolation(
     `extraction_errors` metric, and returns `None`. Never raises. The
     caller decides what a successful result means for its own cache/mtime
     bookkeeping; this function only isolates the extraction step itself.
+
+    The underlying extractor's own error text can embed the full
+    absolute path it tried to open (e.g. a raw `FileNotFoundError`
+    message) — `reason` is sanitized via `sanitize_log_text` before
+    logging, so `vault_root`'s absolute path never reaches a log line
+    through that path. See specs/artifact-lifecycle/spec.md "No
+    confidential values in logs".
     """
     try:
         result = extract_file(path, vault_root)
     except Exception as exc:  # noqa: BLE001 - isolated per-file, reported not raised
-        logger.warning("%s for %s: %s", log_prefix, relative, exc)
+        logger.warning("%s for %s: %s", log_prefix, relative, sanitize_log_text(str(exc), vault_root))
         if metrics is not None:
             metrics.increment("extraction_errors")
         return None
     if "error" in result:
-        logger.warning("%s for %s: %s", log_prefix, relative, result["error"])
+        logger.warning("%s for %s: %s", log_prefix, relative, sanitize_log_text(str(result["error"]), vault_root))
         if metrics is not None:
             metrics.increment("extraction_errors")
         return None
@@ -130,6 +139,7 @@ class ExtractionCache:
 
     def save(self, cache_path: Path) -> None:
         cache_path.write_text(json.dumps({"entries": self._entries, "mtimes": self._mtimes}))
+        restrict_to_owner(cache_path)
 
     def load(self, cache_path: Path) -> None:
         data = json.loads(cache_path.read_text())
@@ -143,6 +153,7 @@ def extract_batch(
     cache: ExtractionCache,
     *,
     metrics: Metrics | None = None,
+    nested_repo_names: frozenset[str] = frozenset(),
 ) -> dict[Path, dict[str, Any]]:
     """Extract every file changed in `batch`, isolating per-file failures.
 
@@ -154,10 +165,27 @@ def extract_batch(
     any) is left unchanged, and the rest of the batch still compiles. Never
     aborts the batch. Returns successfully-extracted results keyed by path
     relative to `vault_root`.
+
+    `RENAMED` changes are processed as one logical unit (see
+    specs/vault-compiler/spec.md "Rename carries source and destination as
+    one logical unit"): `previous_path`'s cache entry is removed first,
+    then the destination is extracted exactly once via the same path as a
+    `CREATED`/`MODIFIED` change — unless the destination itself is
+    excluded (`nested_repo_names` mirrors the watcher's own exclusion
+    config), in which case the rename is treated as a pure deletion of
+    `previous_path`, with no extraction attempted.
     """
     results: dict[Path, dict[str, Any]] = {}
     for change in batch.changes:
         relative = change.path.relative_to(vault_root)
+        if change.kind is ChangeKind.DELETED:
+            cache.delete(relative)
+            continue
+        if change.kind is ChangeKind.RENAMED:
+            assert change.previous_path is not None  # enforced by FileChange.__post_init__
+            cache.delete(change.previous_path.relative_to(vault_root))
+            if is_excluded(change.path, vault_root, nested_repo_names=nested_repo_names):
+                continue
         result = extract_file_with_failure_isolation(
             change.path, vault_root, relative, log_prefix="Extraction failed", metrics=metrics
         )

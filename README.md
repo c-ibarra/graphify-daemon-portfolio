@@ -10,7 +10,7 @@
 
 A local daemon that keeps a knowledge graph derived from an [Obsidian](https://obsidian.md/) vault resident in RAM and serves it to concurrent AI coding agents over [MCP](https://modelcontextprotocol.io/), so an agent can ask "what connects to X" and get an answer in milliseconds instead of re-reading and re-inferring the same context from raw files every session.
 
-**Highlights:** Python · MCP protocol (Streamable HTTP) · concurrency & subprocess isolation · 194 tests, CI-gated (`ruff` + `mypy --strict`) · documented design decisions (ADRs) · 3 real production bugs found & fixed with documented root cause
+**Highlights:** Python · MCP protocol (Streamable HTTP) · concurrency & subprocess isolation · 249 tests, CI-gated (`ruff` + `mypy --strict`) · documented design decisions (ADRs) · 5 real production bugs found & fixed with documented root cause
 
 ## The problem
 
@@ -29,7 +29,7 @@ Keeping one consistent graph snapshot in memory and answering queries straight f
 ## What it does
 
 ```
-Obsidian vault                                          AI coding agents
+Obsidian vault                                          AI agents (Claude Code, etc.)
       │                                                              │
       │ file change                                                 │ MCP / Streamable HTTP
       ▼                                                              ▼
@@ -52,7 +52,7 @@ Obsidian vault                                          AI coding agents
                                 └───────────────────┘          └──────────────────┘
 ```
 
-The vault is the only system of record. Everything else — the in-RAM graph, the trigram index, `graph.json`, `KNOWLEDGE.md`, `vault_index.db` — is disposable: none of it needs protecting, because all of it can be rebuilt from the vault on cold start. There's no mutation API anywhere; agents can only read.
+The vault is the only system of record. Everything else — the in-RAM graph, the trigram index, `graph.json`, `KNOWLEDGE.md`, `vault_index.db` — is disposable in the sense that matters for recovery: all of it can be rebuilt from the vault on cold start, so nothing needs backing up. That's not the same as saying it's not confidential — derived artifacts still carry vault-derived names, relationships, and relative paths, so every file and directory this daemon writes (cache, index, graph JSON, knowledge Markdown, logs) is created owner-only (`0600`/`0700`) on POSIX, and neither the API key nor the vault's absolute path ever appears in a log line. There's no mutation API anywhere; agents can only read.
 
 ## Design decisions worth reading
 
@@ -71,6 +71,10 @@ The vault is the only system of record. Everything else — the in-RAM graph, th
 **The clustering subprocess drains its result queue before joining it, not after.** A community-map result larger than the OS pipe buffer used to deadlock the parent and the child against each other — the classic `multiprocessing.Queue` pitfall, found and fixed while building the benchmarks below. See [`docs/adr/0003-drain-clustering-queue-before-join.md`](docs/adr/0003-drain-clustering-queue-before-join.md).
 
 **There's no manually-bumped version number, on purpose.** Instead, the running daemon reports the exact git commit (and dirty/clean state) it was started from via `GET /metrics` — a fact computed at process start rather than a number someone has to remember to update. See [`docs/adr/0004-self-reported-revision-over-manual-versioning.md`](docs/adr/0004-self-reported-revision-over-manual-versioning.md).
+
+**A rename is compiled as delete-then-create, not a dedicated fast path.** The previous path's cache and index state is removed first, then the destination is extracted exactly once through the same code as a normal create — reusing two already-correct paths instead of building and maintaining a third just to skip one extraction call. See [`docs/adr/0005-rename-as-delete-then-create.md`](docs/adr/0005-rename-as-delete-then-create.md).
+
+**MCP tool errors return a fixed generic message, never the real exception text.** An unexpected failure is logged in full for operators, but the client only ever sees a constant, tool-named message — an allowlist by construction, not a blocklist that has to catch everything that could leak (a file path, node content, an internal function name). See [`docs/adr/0006-mcp-errors-fixed-generic-message.md`](docs/adr/0006-mcp-errors-fixed-generic-message.md).
 
 ## MCP tools
 
@@ -140,7 +144,7 @@ The server binds to `127.0.0.1:8787` by default and refuses to start on anything
 uv run pytest
 ```
 
-194 tests across 61 files: one focused unit-test file per module, contract tests pinning the exact `graphifyy` symbols this daemon depends on, wiring tests verifying the daemon composes correctly end-to-end, integration tests pinning concurrency invariants (single-writer batch execution, clustering serializing the next batch), and a static-analysis test enforcing the no-durability-layer invariant. CI runs `ruff check`, `ruff format --check`, and `mypy --strict` before the suite, fail-fast, on `macos-latest` for every push and pull request (`.github/workflows/ci.yml`).
+249 tests across 95 files: one focused unit-test file per module, contract tests pinning the exact `graphifyy` symbols this daemon depends on, wiring tests verifying the daemon composes correctly end-to-end, integration tests pinning concurrency invariants (single-writer batch execution, clustering serializing the next batch, shutdown waiting for an in-flight batch), and a static-analysis test enforcing the no-durability-layer invariant. CI runs `ruff check`, `ruff format --check`, and `mypy --strict` before the suite, fail-fast, on `macos-latest` for every push and pull request (`.github/workflows/ci.yml`).
 
 ## Performance
 
@@ -176,12 +180,47 @@ The `query_graph` row is the directly comparable one to the legacy baseline (sam
 
 Building these benchmarks also surfaced a real bug, now fixed: `run_clustering_subprocess` deadlocked on any community-map result larger than the OS pipe buffer (~64KB, easily hit past a few thousand nodes) — it called `process.join()` before draining the result queue, the classic `multiprocessing.Queue` deadlock. See [`docs/adr/0003-drain-clustering-queue-before-join.md`](docs/adr/0003-drain-clustering-queue-before-join.md) for the full root-cause writeup.
 
+### Token reduction
+
+Measured 2026-08-24 via `graphify.benchmark.run_benchmark`, against the real production reference corpus (this daemon's own `out/graph.json`, 21,123 nodes / 21,973 edges, derived from the live `~/Documents/Obsidian` vault) — not the synthetic graph above, which exists for reproducibility of the latency/clustering figures, not this one. Corpus size is `graphify.detect()`'s actual scanned word count (2,329,374 words across 1,707 files → ~3,105,832 tokens at 4 chars/token), not the benchmark's node-count fallback estimate. The 10 questions are a representative sample of real agent-style queries — 7 grounded in this project's own [`CONTEXT.md`](CONTEXT.md) domain vocabulary (batch, slow cadence, snapshot, community churn, COW), 3 generic exploration questions — not the tool's canned defaults.
+
+| | value |
+|---|---|
+| Naive baseline (whole corpus) | ~3,105,832 tokens |
+| Avg. subgraph query cost | ~357 tokens |
+| **Reduction** | **~8,700x fewer tokens per query** |
+
+This retires the four previously-unsourced 80/85/90/92% estimates — they aren't in the same ballpark because they weren't measuring the same thing. This number is real, but its baseline is a deliberate worst case: "naive" here means re-reading the *entire* vault for every single question, which is what makes the ratio four orders of magnitude larger than a percentage-style estimate would suggest. No actual workflow re-reads 1,707 files per query; a baseline of "grep + read the few obviously relevant files" would still favor the daemon, just nowhere near 8,700x. Treat this as an upper bound on the saving, not a session-level token budget forecast. Reproduce with:
+
+```bash
+uv run python -c "
+from graphify.benchmark import run_benchmark, print_benchmark
+print_benchmark(run_benchmark(
+    graph_path='out/graph.json',
+    corpus_words=2_329_374,
+    questions=[
+        'how does the vault-compiler batch file changes',
+        'what triggers the slow cadence for clustering',
+        'how is a snapshot published atomically',
+        'what is community ID churn and how is it managed',
+        'how does backpressure and the accumulation episode work',
+        'what is copy-on-write snapshot publishing',
+        'how does the daemon detect changes in the vault',
+        'what are the main entry points',
+        'how are errors handled',
+        'what connects the query API to the graph snapshot',
+    ],
+))"
+```
+
+
 ## Project status
 
-The core daemon — watching the vault, batching changes, extraction, publishing snapshots, clustering, transport and auth, the query tools, result caching, the derived-artifact lifecycle — is done and covered by the test suite above. Two things are still open, and it seemed more useful to say so than to pretend otherwise:
+The core daemon — watching the vault, batching changes, extraction, publishing snapshots, clustering, transport and auth, the query tools, result caching, the derived-artifact lifecycle — is done and covered by the test suite above. One thing is still open, and it seemed more useful to say so than to pretend otherwise:
 
 - **Migration parity verification** — a multi-day parallel run against the legacy pipeline, required before that pipeline can be retired.
-- **Token-reduction measurement** — an actual measurement of how much this cuts per-session token usage, left unmeasured rather than citing unverified estimates.
+
+Token-reduction measurement is done — see [Performance](#performance) above.
 
 ## Further reading
 

@@ -12,12 +12,12 @@ from graphify_daemon.vault_compiler.extraction import ExtractionCache, extract_b
 def test_extraction_failures_increment_the_metrics_counter(tmp_path: Path) -> None:
     good = tmp_path / "good.md"
     good.write_text("# Good\n")
-    missing = tmp_path / "missing.md"  # never created
+    missing = tmp_path / "missing.md"  # never created — MODIFIED against a missing file is a real extraction failure
 
     batch = Batch(
         changes=(
             FileChange(path=good, kind=ChangeKind.MODIFIED),
-            FileChange(path=missing, kind=ChangeKind.DELETED),
+            FileChange(path=missing, kind=ChangeKind.MODIFIED),
         )
     )
 

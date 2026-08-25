@@ -154,6 +154,9 @@ def build_app(
     )
 
 
+DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5
+
+
 def run(
     mcp_server: Server,
     *,
@@ -161,6 +164,7 @@ def run(
     port: int = DEFAULT_PORT,
     api_key: str | None = None,
     extra_routes: list[Route] | None = None,
+    shutdown_timeout: int = DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
 ) -> None:
     """Validate host/api_key, build the app, and block serving it via uvicorn.
 
@@ -172,10 +176,21 @@ def run(
     propagate to whatever the caller already configured on the root logger
     (see `logging_config.configure_logging`) instead of installing their own
     console handlers.
+
+    `timeout_graceful_shutdown=shutdown_timeout`: bounds how long uvicorn
+    waits for open connections to close on SIGTERM/SIGINT before forcing
+    them shut and returning control to the caller. Left at uvicorn's own
+    default (`None`, unbounded) this hangs forever whenever a client holds
+    the MCP `subscriptions/listen` stream open (which this daemon
+    deliberately keeps alive indefinitely under normal operation) --
+    confirmed live against the running daemon, where a real SIGTERM never
+    returned control to `run_forever`'s `finally: daemon.shutdown()` at
+    all. A bounded wait here is what makes that drain/persist/idempotent-
+    close path actually reachable.
     """
     validate_host(host)
     validated_key = validate_api_key(api_key)
     import uvicorn
 
     app = build_app(mcp_server, api_key=validated_key, port=port, extra_routes=extra_routes)
-    uvicorn.run(app, host=host, port=port, log_config=None)
+    uvicorn.run(app, host=host, port=port, log_config=None, timeout_graceful_shutdown=shutdown_timeout)

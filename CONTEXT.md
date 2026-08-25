@@ -8,8 +8,12 @@ A local daemon that derives a knowledge graph from an Obsidian vault and serves 
 The Obsidian directory (`~/Documents/Obsidian`) that is the single source of truth for all graph content. State flows from the vault to the graph, never the other way.
 _Avoid_: repo, knowledge base
 
+**Vault confinement**:
+The invariant that every file this daemon processes — at cold start and in the live watcher — resolves (`Path.resolve(strict=False)`) inside `vault_root`. A path whose resolved real location falls outside the vault, including one reached through a symlink, is rejected rather than read.
+_Avoid_: path validation, symlink check
+
 **Derived artifact**:
-Any data regenerable from the vault: the in-RAM graph, `graph.json`, `vault_index.db`, `KNOWLEDGE.md`. None of these is a system of record — durability and recovery come from regenerating them, not from protecting them.
+Any data regenerable from the vault: the in-RAM graph, `graph.json`, `vault_index.db`, `KNOWLEDGE.md`. None of these is a system of record — durability and recovery come from regenerating them, not from backing them up. That's a claim about recovery, not about confidentiality: derived artifacts still carry vault-derived names, relationships, and relative paths, so every one of them is written owner-only.
 _Avoid_: source of truth, primary data
 
 **Snapshot**:

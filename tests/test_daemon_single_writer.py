@@ -34,7 +34,7 @@ def test_two_near_simultaneous_batches_never_interleave(tmp_path: Path, monkeypa
 
     events: list[str] = []
 
-    def _fake_extract_batch(batch, vault_root, cache, *, metrics=None):
+    def _fake_extract_batch(batch, vault_root, cache, *, metrics=None, nested_repo_names=frozenset()):
         name = batch.changes[0].path.name
         events.append(f"{name}-start")
         time.sleep(0.2)

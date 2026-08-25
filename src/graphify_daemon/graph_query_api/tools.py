@@ -13,6 +13,7 @@ match, same as `get_node`.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -27,6 +28,8 @@ from graphify_daemon.adapters import graphify_query as adapter
 from graphify_daemon.artifact_lifecycle.metrics import Metrics
 from graphify_daemon.graph_query_api.query_cache import DEFAULT_LRU_SIZE, QueryCache
 from graphify_daemon.vault_compiler.snapshot import GraphSnapshot
+
+logger = logging.getLogger(__name__)
 
 # Schemas copied verbatim from graphify.serve for client compatibility --
 # see specs/graph-query-api/spec.md "Minimum read tool surface".
@@ -420,8 +423,9 @@ def build_handlers(
                 query_cache.set(**cache_kwargs, result=text)
             else:
                 text = await asyncio.to_thread(execute_tool, params.name, arguments, snapshot)
-        except Exception as exc:  # noqa: BLE001 - reported to the caller as a clean MCP error, not raised
-            return _error_result(f"Tool {params.name} failed: {exc}")
+        except Exception as exc:
+            logger.exception("Tool %s failed: %s", params.name, exc)
+            return _error_result(f"Tool {params.name} failed. See daemon logs for detail.")
 
         return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
 
