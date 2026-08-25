@@ -105,7 +105,7 @@ All seven tools read exclusively from the resident snapshot — no disk access o
 [![ruff](https://img.shields.io/badge/lint-ruff-261230?logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
 [![mypy](https://img.shields.io/badge/mypy-strict-2b6cb0)](https://mypy-lang.org/)
 
-Python 3.12 · [`mcp`](https://pypi.org/project/mcp/) (Streamable HTTP) · [Starlette](https://www.starlette.dev/) + [uvicorn](https://www.uvicorn.org/) · [watchdog](https://pypi.org/project/watchdog/) for filesystem events · SQLite (WAL mode) for a lightweight file index · [`graphifyy`](https://pypi.org/project/graphifyy/) (version-pinned, confined behind a single adapter module) for extraction, clustering, and graph analysis primitives · [`jsonschema`](https://pypi.org/project/jsonschema/) validating every MCP tool call against its own declared schema · `ruff` + `mypy --strict` gating CI.
+Python 3.12 · [`mcp`](https://pypi.org/project/mcp/) (Streamable HTTP) · [Starlette](https://www.starlette.dev/) + [uvicorn](https://www.uvicorn.org/) · [watchdog](https://pypi.org/project/watchdog/) for filesystem events · SQLite (WAL mode) for a lightweight file index · [`graphifyy`](https://pypi.org/project/graphifyy/) — a third-party graph/extraction library ([Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify), not authored by this project — version-pinned, confined behind a single adapter module since it depends on 5 of the library's private symbols) for extraction, clustering, and graph analysis primitives · [`jsonschema`](https://pypi.org/project/jsonschema/) validating every MCP tool call against its own declared schema · `ruff` + `mypy --strict` gating CI.
 
 ## Getting started
 
@@ -222,6 +222,10 @@ The core daemon — watching the vault, batching changes, extraction, publishing
 - **Migration parity verification** — a multi-day parallel run against the legacy pipeline, required before that pipeline can be retired.
 
 Token-reduction measurement is done — see [Performance](#performance) above.
+
+## About this repository
+
+This is a reviewed, periodic export of active private development — commits here mirror milestones from a private, spec-driven repo (proposal → design doc with rejected alternatives → task list → archive, per change) rather than every intermediate commit. That's why the history is short: it's a curated release trail, not the full development log.
 
 ## Further reading
 
