@@ -4,7 +4,7 @@
 
 # graphify-daemon
 
-[![CI](https://github.com/c-ibarra/graphify-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/c-ibarra/graphify-daemon/actions/workflows/ci.yml)
+[![CI](https://github.com/c-ibarra/graphify-daemon-portfolio/actions/workflows/ci.yml/badge.svg)](https://github.com/c-ibarra/graphify-daemon-portfolio/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-carlosibarra-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/carlosibarra)
 
